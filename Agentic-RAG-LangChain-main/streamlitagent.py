@@ -10,14 +10,17 @@ from langchain import hub
 from langchain_community.tools.tavily_search import TavilySearchResults
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.messages import HumanMessage
+from langchain.agents import initialize_agent
 
 # Load environment variables
 load_dotenv()
 
-# API Keys
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+
+MISTRAL_API_KEY = os.environ["mistral_api_key"] ="Wxn2lCBcugXAz0GK265wJR4H6jYRrNl3"
+PINECONE_API_KEY = os.environ["PINECONE_API_KEY"] ="pcsk_6L8ZmY_fh3AkwzUNVg87rneaKU2HgoApGK91wJJoVoYtX4HSdnKdxaWpuktSyjkApsBeZ"
+TAVILY_API_KEY=os.environ["TAVILY_API_KEY"]="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"
+
 
 index_name = "agenticragmodel"
 embed = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -36,13 +39,16 @@ qa_db = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=vecto
 prompt = hub.pull("hwchase17/react")
 
 # Tools
-search_tool = TavilySearchResults(max_results=10, tavily_api_key=TAVILY_API_KEY)
+tavily = TavilySearchResults(max_results=10, tavily_api_key=TAVILY_API_KEY)
+def tavily_wrapper(query):
+    print(f"🔍 Tavily invoked for: {query}")
+    return tavily.run(query)
 tools = [
     Tool(name="Pinecone Document Store", func=qa_db.run, description="Use it to lookup information from Pinecone"),
-    Tool(name="Tavily", func=search_tool.run, description="Use this to lookup information from Tavily")
+    Tool(name="Tavily", func=tavily_wrapper, description="Use this to lookup information from Tavily")
 ]
 
-agent = AgentExecutor(tools=tools, agent=llm, handle_parsing_errors=True, verbose=True, memory=conversational_memory)
+agent = initialize_agent(tools=tools, llm=llm,agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, handle_parsing_errors=True, verbose=True, memory=conversational_memory)
 
 # Streamlit UI
 st.set_page_config(page_title="AI Q&A System", layout="centered")
@@ -64,11 +70,30 @@ query = st.text_input("Enter your question:")
 if st.button("Ask"):
     if query:
         with st.spinner("Fetching answer..."):
+            print("Agent input keys:", getattr(agent, "input_keys", "No input keys found"))
             response = agent.invoke({"input": query})
-            st.write("### Answer:")
-            st.success(response)
-    else:
-        st.warning("Please enter a question.")
+            if "Tavily" in response["output"]:
+                print("\n🔹 Tavily Search was used!\n")
+                search_results = tavily.run(query)
+                extracted_urls = [item["url"] for item in search_results]
+                
+                print(f"Query: {query}")
+                print(f"Response: {response}")
+                print(f"Extracted URLs: {extracted_urls}")
+                st.success(response["output"])
+                st.success(f"Tavily url: {extracted_urls}")
+            else:
+                print("\n🔸 Tavily was NOT used.\n")
+                
+                # Force Tavily as a backup if Pinecone gives a bad response
+                backup_response = tavily.run(query)
+                if backup_response:
+                    extracted_urls = [item["url"] for item in backup_response]
+                    print(f"🔁 Forced fallback to Tavily: {extracted_urls}")
+                    st.write("### Answer (from Tavily):")
+                    st.write("### Answer:")
+                    st.success(response["output"])
+                    st.success(f"Tavily url: {extracted_urls}")
 
 # Conversation History
 if st.button("Clear Memory"):
